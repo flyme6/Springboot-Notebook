@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="zh" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <th:block th:include="include :: header('定时任务详细')"/>
+
+    <link th:href="@{/css/bootstrap.min.css?v=3.3.7}" rel="stylesheet"/>
+    <link th:href="@{/css/viewer.min.css}" rel="stylesheet"/>
+    <style>
+        /* 图片画廊容器样式 */
+        .gallery {
+            padding: 20px;
+        }
+
+        /* 单个图片项容器样式 */
+        .gallery-item {
+            margin-bottom: 20px;
+            transition: transform 0.3s ease; /* 添加过渡效果 */
+            cursor: pointer;
+            position: relative;
+        }
+
+        /* 图片项悬停效果 */
+        .gallery-item:hover {
+            transform: scale(1.02); /* 悬停时放大效果 */
+        }
+
+        /* 图片样式 */
+        .gallery-item img {
+            width: 100%;
+            height: 160px;
+            object-fit: cover; /* 确保图片填充满容器且不变形 */
+            border-radius: 8px;
+        }
+
+        /* 图片标题样式 */
+        .image-title {
+            margin-top: 8px;
+            text-align: center;
+            font-size: 12px;
+            color: #666;
+        }
+
+        /* 自定义5列布局样式 */
+        .col-md-15th {
+            width: 20%;
+            float: left;
+            padding-right: 15px;
+            padding-left: 15px;
+        }
+
+        /* 响应式布局 - 平板设备 */
+        @media (max-width: 768px) {
+            .col-md-15th {
+                width: 50%; /* 在平板上显示两列 */
+            }
+        }
+
+        /* 响应式布局 - 手机设备 */
+        @media (max-width: 480px) {
+            .col-md-15th {
+                width: 100%; /* 在手机上显示单列 */
+            }
+        }
+
+        /* 底部按钮组容器样式 */
+        .button-group {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 1000;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            background: rgba(255, 255, 255, 0.9); /* 半透明背景 */
+            padding: 10px;
+            border-radius: 4px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1); /* 添加阴影效果 */
+        }
+
+        /* 图片选择框容器样式 */
+        .checkbox-wrapper {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            background: rgba(255, 255, 255, 0.8);
+            border-radius: 4px;
+            padding: 2px;
+        }
+
+        /* 打印样式设置 */
+        @media print {
+            .no-print {
+                display: none !important; /* 打印时隐藏不需要的元素 */
+            }
+
+            .selected-for-print {
+                page-break-inside: avoid; /* 防止图片在打印时被分页 */
+                margin-bottom: 20px;
+            }
+        }
+
+        /* 全选按钮容器样式 */
+        .select-all-container {
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+            user-select: none; /* 防止文字被选中 */
+            padding: 6px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            transition: all 0.3s ease;
+        }
+
+        /* 全选按钮悬停效果 */
+        .select-all-container:hover {
+            background-color: #f8f9fa;
+            border-color: #ced4da;
+        }
+
+        /* 全选复选框样式 */
+        .select-all-container input[type="checkbox"] {
+            margin-right: 8px;
+            cursor: pointer;
+        }
+
+        /* 全选按钮文字样式 */
+        .select-all-container label {
+            margin: 0;
+            cursor: pointer;
+            color: #495057;
+            font-weight: 500;
+        }
+
+        /* 打印按钮样式 */
+        #printButton {
+            padding: 6px 16px;
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body class="">
+<div class="container">
+    <div class="row gallery" id="imageGallery"></div>
+    <nav aria-label="Page navigation" class="my-4 no-print">
+        <ul class="pagination justify-content-center" id="pagination"></ul>
+    </nav>
+</div>
+
+<div class="button-group no-print">
+    <div class="select-all-container">
+        <input type="checkbox" id="selectAll" class="form-check-input">
+        <label for="selectAll" class="form-check-label">全选所有图片</label>
+    </div>
+    <button id="printButton" class="btn btn-primary">
+        打印选中图片 (<span id="selectedCount">0</span>)
+    </button>
+</div>
+
+<div th:include="include :: footer"></div>
+<script th:src="@{/js/jquery.min.js}"></script>
+<script th:src="@{/js/bootstrap.min.js}"></script>
+<script th:src="@{/js/viewer.min.js}"></script>
+<script>
+    // 全局变量定义
+    let currentPage = 1;                    // 当前页码
+    const itemsPerPage = 10;                // 每页显示的图片数量
+    const gallery = document.getElementById('imageGallery');  // 图片画廊容器
+    let viewer = null;                      // 图片查看器实例
+    const selectedImages = new Set();       // 存储已选择的图片URL集合
+    let currentImages = [];                 // 当前页面显示的图片数据
+    let allImages = [];                     // 所有图片数据
+
+    /**
+     * 从服务器获取图片数据
+     * @param {number} page - 页码
+     */
+    function fetchImages(page) {
+        $.ajax({
+            url: ctx + "monitor/job/infos",
+            type: "GET",
+            data: {
+                pageNum: page,
+                pageSize: itemsPerPage
+            },
+            success: function (res) {
+                if (res.code === 0) {
+                    const data = res.data;
+                    allImages = data.rows;           // 保存当前页图片数据
+                    displayImages(data.rows);        // 显示图片
+                    updatePagination(data.total);    // 更新分页
+                    updateSelectAllCheckbox();       // 更新全选状态
+                } else {
+                    $.modal.alertError(res.msg);
+                }
+            },
+            error: function () {
+                $.modal.alertError("获取图片数据失败");
+            }
+        });
+    }
+
+    /**
+     * 显示图片列表
+     * @param {Array} images - 图片数据数组
+     */
+    function displayImages(images) {
+        currentImages = images;  // 更新当前页图片数据
+
+        // 生成图片HTML
+        gallery.innerHTML = images.map((image) => `
+                <div class="col-md-15th gallery-item">
+                    <img src="${image.url}" alt="${image.name}">
+                    <div class="image-title">${image.name}</div>
+                    <div class="checkbox-wrapper no-print">
+                        <input type="checkbox" 
+                               class="form-check-input" 
+                               data-image-url="${image.url}"
+                               data-image-name="${image.name}"
+                               ${selectedImages.has(image.url) ? 'checked' : ''}>
+                    </div>
+                </div>
+            `).join('');
+
+        // 更新复选框和全选状态
+        updateCheckboxListeners();
+        updateSelectAllCheckbox();
+
+        // 重新初始化图片查看器
+        if (viewer) {
+            viewer.destroy();
+        }
+
+        // 配置图片查看器
+        viewer = new Viewer(gallery, {
+            navbar: true,      // 显示导航栏
+            toolbar: true,     // 显示工具栏
+            title: [true, (image, imageData) => {
+                const index = Array.from(gallery.querySelectorAll('img')).indexOf(image);
+                return images[index].name;   // 显示图片名称
+            }],
+        });
+    }
+
+    /**
+     * 更新分页控件
+     * @param {number} total - 总图片数量
+     */
+    function updatePagination(total) {
+        const totalPages = Math.ceil(total / itemsPerPage);
+        const pagination = document.getElementById('pagination');
+
+        // 生成分页HTML
+        let paginationHTML = `
+                <li class="page-item ${currentPage === 1 ? 'disabled' : ''}">
+                    <a class="page-link" href="#" data-page="${currentPage - 1}">上一页</a>
+                </li>
+            `;
+
+        // 生成页码按钮
+        for (let i = 1; i <= totalPages; i++) {
+            paginationHTML += `
+                    <li class="page-item ${currentPage === i ? 'active' : ''}">
+                        <a class="page-link" href="#" data-page="${i}">${i}</a>
+                    </li>
+                `;
+        }
+
+        paginationHTML += `
+                <li class="page-item ${currentPage === totalPages ? 'disabled' : ''}">
+                    <a class="page-link" href="#" data-page="${currentPage + 1}">下一页</a>
+                </li>
+            `;
+
+        pagination.innerHTML = paginationHTML;
+
+        // 添加分页点击事件
+        pagination.querySelectorAll('.page-link').forEach(link => {
+            link.addEventListener('click', (e) => {
+                e.preventDefault();
+                const newPage = parseInt(e.target.dataset.page);
+                if (newPage >= 1 && newPage <= totalPages) {
+                    currentPage = newPage;
+                    fetchImages(currentPage);
+                }
+            });
+        });
+    }
+
+    /**
+     * 更新全选复选框状态
+     */
+    function updateSelectAllCheckbox() {
+        const selectAllCheckbox = document.getElementById('selectAll');
+        const currentPageImages = currentImages.map(img => img.url);
+        // 检查当前页是否全部选中
+        const isAllSelected = currentPageImages.every(url => selectedImages.has(url));
+        selectAllCheckbox.checked = isAllSelected && currentPageImages.length > 0;
+        // 设置半选状态（部分选中）
+        selectAllCheckbox.indeterminate = !isAllSelected && currentPageImages.some(url => selectedImages.has(url));
+    }
+
+    /**
+     * 更新图片复选框的事件监听
+     */
+    function updateCheckboxListeners() {
+        const checkboxes = document.querySelectorAll('.form-check-input');
+        checkboxes.forEach(checkbox => {
+            if (checkbox.id === 'selectAll') return; // 跳过全选复选框
+            
+            checkbox.addEventListener('change', function () {
+                const imageUrl = this.dataset.imageUrl;
+                if (this.checked) {
+                    selectedImages.add(imageUrl);     // 添加到选中集合
+                } else {
+                    selectedImages.delete(imageUrl);  // 从选中集合移除
+                }
+                updatePrintButton();         // 更新打印按钮状态
+                updateSelectAllCheckbox();   // 更新全选状态
+            });
+        });
+    }
+
+    /**
+     * 更新打印按钮状态
+     */
+    function updatePrintButton() {
+        const selectedCount = document.getElementById('selectedCount');
+        selectedCount.textContent = selectedImages.size;  // 更新选中数量
+    }
+
+    /**
+     * 打印功能
+     */
+    document.getElementById('printButton').addEventListener('click', function () {
+        const printWindow = window.open('', '_blank');
+
+        // 生成打印页面
+        printWindow.document.write(`
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>选中图片</title>
+                    <style>
+                        @page {
+                            size: A4 landscape;  /* A4横向打印 */
+                            margin: 0;
+                        }
+                        body { 
+                            margin: 0;
+                            padding: 0;
+                        }
+                        .page {
+                            width: 297mm;  /* A4横向宽度 */
+                            height: 210mm; /* A4横向高度 */
+                            page-break-after: always; /* 每页强制分页 */
+                            position: relative;
+                            display: flex;
+                            justify-content: center; /* 水平居中 */
+                            align-items: center;     /* 垂直居中 */
+                        }
+                        img { 
+                            max-width: 297mm;
+                            max-height: 210mm;
+                            object-fit: contain;  /* 保持图片比例 */
+                            display: block;
+                        }
+                        @media print {
+                            html, body {
+                                width: 297mm;
+                                height: 210mm;
+                            }
+                            .page {
+                                page-break-after: always;
+                                margin: 0;
+                                padding: 0;
+                            }
+                        }
+                    </style>
+                </head>
+                <body>
+                    ${Array.from(selectedImages).map(url => `
+                        <div class="page">
+                            <img src="${url}">
+                        </div>
+                    `).join('')}
+                </body>
+                </html>
+            `);
+
+        printWindow.document.close();
+
+        // 等待图片加载完成后自动打印
+        printWindow.onload = function () {
+            printWindow.print();
+        };
+    });
+
+    /**
+     * 全选功能
+     */
+    document.getElementById('selectAll').addEventListener('change', function () {
+        const isChecked = this.checked;
+        
+        // 更新选中状态
+        currentImages.forEach(image => {
+            if (isChecked) {
+                selectedImages.add(image.url);     // 添加到选中集合
+            } else {
+                selectedImages.delete(image.url);  // 从选中集合移除
+            }
+        });
+        
+        // 更新页面上的复选框状态
+        const checkboxes = document.querySelectorAll('.gallery-item .form-check-input');
+        checkboxes.forEach(checkbox => {
+            checkbox.checked = isChecked;
+        });
+        
+        updatePrintButton();  // 更新打印按钮状态
+    });
+
+    // 初始化显示
+    fetchImages(currentPage);
+</script>
+</body>
+</html>
